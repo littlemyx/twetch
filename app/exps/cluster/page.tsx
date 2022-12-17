@@ -1,9 +1,11 @@
 "use client";
-import { useEffect, useCallback, useRef, useMemo } from "react";
+import { useEffect, useCallback, useRef, useMemo, useState } from "react";
 import { Buffer } from "buffer/";
 
 import blob2buffer from "@/lib/blob2buffer";
 import Parser from "@/lib/parser";
+import downloadBlob from "@/lib/downloadBlob";
+import Recorder from "@/lib/recorder";
 
 const ONE_SECOND = 1000;
 
@@ -12,18 +14,29 @@ interface Props {
 }
 
 export default function Cluster({ interval = ONE_SECOND / 10 }: Props) {
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const [time, setTime] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const mediaChunksRef = useRef<Blob[]>([]);
-  const constraints = useRef({
-    // audio: true,
-    audio: false,
-    video: {
-      width: { min: 640, ideal: 640, max: 640 },
-      height: { min: 640, ideal: 640, max: 640 }
-    }
-  });
 
   const parser = useMemo(() => new Parser(), []);
+  const recorder = useRef<Recorder | null>(null);
+  if (recorder.current === null) {
+    recorder.current = new Recorder({ interval });
+  }
+
+  const downloadClickHandler = useCallback(() => {
+    const result = parser.finish();
+    if (result !== null) {
+      /////////////
+      // const newParser = new Parser();
+      // newParser.addData(result);
+      /////////////
+
+      const blob = new Blob([result.buffer], { type: "video/webm" });
+      downloadBlob(blob, "test.webm", "video/webm");
+    }
+  }, [parser]);
 
   const dataAvailableHandler = useCallback(({ data }: BlobEvent) => {
     mediaChunksRef.current.push(data);
@@ -35,44 +48,32 @@ export default function Cluster({ interval = ONE_SECOND / 10 }: Props) {
 
   useEffect(() => {
     return () => {
-      if (mediaRecorderRef.current?.state === "recording") {
+      if (recorder.current?.isRecording) {
         stopEventHandler();
       }
     };
   }, [stopEventHandler]);
 
-  const startClickHandler = useCallback(() => {
+  const startClickHandler = useCallback(async () => {
     mediaChunksRef.current = [];
 
-    navigator.mediaDevices
-      .getUserMedia(constraints.current)
-      .then(function (stream) {
-        const options = {
-          // audioBitsPerSecond: 128000,
-          // videoBitsPerSecond: 2500000,
-          // mimeType: "video/webm;codecs=vp9"
-          mimeType: "video/webm;codecs=opus,vp8"
-          // mimeType: "video/x-matroska;codecs=avc1,opus"
-        };
-        mediaRecorderRef.current = new MediaRecorder(stream, options);
-        mediaRecorderRef.current.start(interval);
+    await recorder.current?.init();
 
-        // const mediaTimerId = setInterval(onPeriodTic, PERIOD);
+    recorder.current?.startRecording(dataAvailableHandler, stopEventHandler);
 
-        mediaRecorderRef.current.onstop = function () {
-          stopEventHandler();
-        };
-
-        mediaRecorderRef.current.ondataavailable = dataAvailableHandler;
-      })
-      .catch(function (err) {
-        console.log("The following error occured: " + err);
-      });
-  }, [dataAvailableHandler, interval, stopEventHandler]);
+    timerRef.current = setInterval(() => {
+      setTime(time => time + 1);
+    }, 1000);
+  }, [dataAvailableHandler, stopEventHandler]);
 
   const stopClickHadler = useCallback(() => {
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current?.stop();
+    if (recorder.current?.isRecording) {
+      recorder.current?.stopRecording();
+    }
+
+    if (timerRef.current !== null) {
+      clearInterval(timerRef.current);
+      setTime(0);
     }
 
     blob2buffer(
@@ -97,6 +98,11 @@ export default function Cluster({ interval = ONE_SECOND / 10 }: Props) {
       <br />
       <button onClick={startClickHandler}>START</button>
       <button onClick={stopClickHadler}>STOP</button>
+      <button onClick={downloadClickHandler}>DOWNLOAD</button>
+      <br />
+      <br />
+      <br />
+      <div style={{ fontSize: "48px" }}>Time passed: {time}s</div>
     </div>
   );
 }
