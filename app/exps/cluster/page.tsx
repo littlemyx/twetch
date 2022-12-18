@@ -1,11 +1,13 @@
 "use client";
 import { useEffect, useCallback, useRef, useMemo, useState } from "react";
 import { Buffer } from "buffer/";
+import { EBMLElementDetail, Encoder } from "ts-ebml";
 
 import blob2buffer from "@/lib/blob2buffer";
 import Parser from "@/lib/parser";
 import downloadBlob from "@/lib/downloadBlob";
 import Recorder from "@/lib/recorder";
+import Queue from "@/lib/queue";
 
 const ONE_SECOND = 1000;
 
@@ -13,38 +15,85 @@ interface Props {
   interval?: number;
 }
 
-export default function Cluster({ interval = ONE_SECOND / 10 }: Props) {
+export default function Cluster({ interval = ONE_SECOND }: Props) {
   const [time, setTime] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const headerRef = useRef<EBMLElementDetail[] | null>(null);
 
   const mediaChunksRef = useRef<Blob[]>([]);
 
   const parser = useMemo(() => new Parser(), []);
+
   const recorder = useRef<Recorder | null>(null);
   if (recorder.current === null) {
     recorder.current = new Recorder({ interval });
   }
 
-  const downloadClickHandler = useCallback(() => {
-    const result = parser.finish();
-    if (result !== null) {
-      /////////////
-      // const newParser = new Parser();
-      // newParser.addData(result);
-      /////////////
+  const queue = useRef<Queue<EBMLElementDetail[]> | null>(null);
+  if (queue.current === null) {
+    queue.current = new Queue(21);
+  }
 
-      const blob = new Blob([result.buffer], { type: "video/webm" });
+  const downloadClickHandler = useCallback(() => {
+    // const result = parser.finish();
+    const encoder = new Encoder();
+
+    let clip: EBMLElementDetail[] | null = null;
+
+    if (headerRef.current !== null && queue.current?.getAll()) {
+      clip = [...headerRef.current];
+      queue.current?.getAll().forEach((cluster, index) => {
+        clip?.push(...cluster);
+      });
+    }
+
+    let encodedClip: ArrayBuffer | null = null;
+    if (clip !== null) {
+      encodedClip = encoder.encode(clip);
+    }
+
+    if (encodedClip !== null) {
+      const blob = new Blob([encodedClip], { type: "video/webm" });
       downloadBlob(blob, "test.webm", "video/webm");
     }
-  }, [parser]);
-
-  const dataAvailableHandler = useCallback(({ data }: BlobEvent) => {
-    mediaChunksRef.current.push(data);
   }, []);
 
-  const stopEventHandler = useCallback(() => {
-    console.log(mediaChunksRef.current);
-  }, []);
+  const dataAvailableHandler = useCallback(
+    async ({ data }: BlobEvent) => {
+      const result = await new Promise<Buffer>((resolve, reject) => {
+        blob2buffer(
+          new Blob([data], {
+            type: "video/webm;codecs=opus,vp8"
+          }),
+          function (error: string | null, result?: Buffer) {
+            if (error) {
+              reject(error);
+            }
+
+            if (result) {
+              resolve(result);
+            }
+          }
+        );
+      });
+
+      const { header, clusters } = parser.resolveChunk(result);
+
+      if (headerRef.current === null) {
+        headerRef.current = header;
+      }
+      clusters.forEach(cluster => {
+        queue.current?.push(cluster);
+      });
+
+      console.log(`outer header:  ${headerRef.current}`);
+      console.log(queue.current?.getAll());
+    },
+    [parser]
+  );
+
+  const stopEventHandler = useCallback(() => {}, []);
 
   useEffect(() => {
     return () => {
@@ -75,22 +124,7 @@ export default function Cluster({ interval = ONE_SECOND / 10 }: Props) {
       clearInterval(timerRef.current);
       setTime(0);
     }
-
-    blob2buffer(
-      new Blob(mediaChunksRef.current, {
-        type: "video/webm;codecs=opus,vp8"
-      }),
-      function (error: string | null, result?: Buffer) {
-        if (error) {
-          throw error;
-        }
-
-        if (result) {
-          parser.addData(result);
-        }
-      }
-    );
-  }, [parser]);
+  }, []);
 
   return (
     <div>

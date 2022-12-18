@@ -38,7 +38,7 @@ export default class Recorder {
   }
 
   constructor({
-    interval = 1000,
+    interval = 3000,
     constraints = {
       audio: false,
       video: {
