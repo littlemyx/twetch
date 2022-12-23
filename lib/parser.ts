@@ -77,8 +77,6 @@ export default class Parser {
       const header = ebmlElms.splice(0, clusterIndexes[0]);
       this._header = header ?? null;
 
-      console.log(`inner header:  ${this._header}`);
-
       // const arrayBuffer = this._buffer.buffer;
 
       // const bufferWithoutHeader = arrayBuffer.slice(this._reader.metadataSize);

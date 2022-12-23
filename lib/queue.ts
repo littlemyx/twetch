@@ -23,7 +23,9 @@ export default class Queue<T> {
     this._storage.push(item);
 
     if (this._storage.length > this._length) {
-      this._storage.shift();
+      const shifted = this._storage.shift();
+      console.log("overfloated! Shifting", shifted);
+      console.log("new queue", this._storage);
     }
   }
 

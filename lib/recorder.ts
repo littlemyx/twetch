@@ -1,5 +1,3 @@
-import { rejects } from "assert";
-
 type Dimension = { min: number; ideal: number; max: number };
 
 type VideoConstraints = {
@@ -40,7 +38,7 @@ export default class Recorder {
   constructor({
     interval = 3000,
     constraints = {
-      audio: false,
+      audio: true,
       video: {
         width: { min: 640, ideal: 640, max: 640 },
         height: { min: 640, ideal: 640, max: 640 }
