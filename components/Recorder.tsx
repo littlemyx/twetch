@@ -12,20 +12,26 @@ const ONE_SECOND = 1000;
 
 interface Props {
   interval?: number;
+  queueSize?: number;
   onClustersUpdate: (
     newClusters: EBMLElementDetail[][],
-    header: EBMLElementDetail[] | null
+    header: EBMLElementDetail[] | null,
+    shift: number
   ) => void;
 }
 
 export default function RecorderComponent({
   interval = ONE_SECOND,
+  queueSize = 4,
   onClustersUpdate
 }: Props) {
   const [time, setTime] = useState(0);
+  const [clustersCount, setClustersCount] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const headerRef = useRef<EBMLElementDetail[] | null>(null);
+
+  const shiftRef = useRef(0);
 
   const onClustersUpdateRef = useRef<typeof onClustersUpdate>(onClustersUpdate);
 
@@ -44,7 +50,7 @@ export default function RecorderComponent({
 
   const queue = useRef<Queue<EBMLElementDetail[]> | null>(null);
   if (queue.current === null) {
-    queue.current = new Queue(4);
+    queue.current = new Queue(queueSize);
   }
 
   const downloadClickHandler = useCallback(() => {
@@ -73,36 +79,61 @@ export default function RecorderComponent({
 
   const dataAvailableHandler = useCallback(
     async ({ data }: BlobEvent) => {
-      const result = await new Promise<Buffer>((resolve, reject) => {
-        blob2buffer(
-          new Blob([data], {
-            type: "video/webm;codecs=opus,vp8"
-          }),
-          function (error: string | null, result?: Buffer) {
-            if (error) {
-              reject(error);
-            }
+      if (queue.current !== null && queue.current !== undefined) {
+        const result = await new Promise<Buffer>((resolve, reject) => {
+          blob2buffer(
+            new Blob([data], {
+              type: "video/webm;codecs=opus,vp8"
+            }),
+            function (error: string | null, result?: Buffer) {
+              if (error) {
+                reject(error);
+              }
 
-            if (result) {
-              resolve(result);
+              if (result) {
+                resolve(result);
+              }
+            }
+          );
+        });
+
+        const { header, clusters } = parser.resolveChunk(result);
+
+        setClustersCount(count => count + clusters.length);
+
+        if (headerRef.current === null) {
+          headerRef.current = header;
+        }
+        let shift = shiftRef.current;
+
+        clusters.forEach(cluster => {
+          const overflow = queue.current!.push(cluster);
+
+          if (overflow !== null) {
+            const firstItem = queue.current!.getItemByIndex(0);
+
+            if (overflow !== null) {
+              const overflowedItemLength =
+                overflow[overflow.length - 1].dataEnd - overflow[0].tagStart;
+
+              shift = shift + overflowedItemLength;
             }
           }
+        });
+
+        shiftRef.current = shift;
+
+        // console.log("header", header.length);
+        // console.log("queue", queue.current?.getAll().length);
+
+        onClustersUpdateRef.current(
+          queue.current?.getAll() ?? [],
+          header,
+          shiftRef.current
         );
-      });
-
-      const { header, clusters } = parser.resolveChunk(result);
-
-      if (headerRef.current === null) {
-        headerRef.current = header;
+      } else {
+        throw new Error("Queue is not defined");
       }
-      clusters.forEach(cluster => {
-        queue.current?.push(cluster);
-      });
-
-      // console.log("header", header.length);
-      // console.log("queue", queue.current?.getAll().length);
-
-      onClustersUpdateRef.current(queue.current?.getAll() ?? [], header);
     },
     [parser]
   );
@@ -149,6 +180,10 @@ export default function RecorderComponent({
       <br />
       <br />
       <div style={{ fontSize: "48px" }}>Time passed: {time}s</div>
+      <br />
+      <br />
+      <div style={{ fontSize: "48px" }}>Queue size: {queueSize}</div>
+      <div style={{ fontSize: "48px" }}>Clusters passed: {clustersCount}</div>
     </div>
   );
 }

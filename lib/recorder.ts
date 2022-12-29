@@ -68,6 +68,10 @@ export default class Recorder {
     });
   }
 
+  finishStream() {
+    this._stream?.getTracks().forEach(track => track.stop());
+  }
+
   setRecordingOptions(newOptions: RecordingOptions) {
     if (this.isRecording) {
       throw new Error("The options can not be changed while already recording");
@@ -108,5 +112,6 @@ export default class Recorder {
 
   stopRecording() {
     this._mediaRecorder?.stop();
+    this.finishStream();
   }
 }

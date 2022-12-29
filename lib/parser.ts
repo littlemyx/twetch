@@ -5,6 +5,7 @@ type ResolvedChunk = {
   header: EBMLElementDetail[];
   clusters: EBMLElementDetail[][];
 };
+
 export default class Parser {
   private _reader: Reader;
   private _buffer: Buffer;

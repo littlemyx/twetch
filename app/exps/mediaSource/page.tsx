@@ -14,7 +14,7 @@ export default function MediaSourceComponent() {
     }
 
     // Video that will be fetched and appended
-    const remoteVidUrl = `/test3.webm`;
+    const remoteVidUrl = `/reduced2.webm`;
 
     // Fetch remote URL, getting contents as binary blob
     const vidBlob = await (await fetch(remoteVidUrl)).blob();

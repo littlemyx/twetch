@@ -18,8 +18,12 @@ const Player = forwardRef<HTMLVideoElement, Props>(function Player(
     <div>
       Player
       <br />
-      <video controls ref={ref} />
+      <br />
       <button onClick={playClickHandler}>PLAY</button>
+      <br />
+      <br />
+      <br />
+      <video controls ref={ref} />
     </div>
   );
 });
