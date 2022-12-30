@@ -1,6 +1,12 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { EBMLElementDetail, Encoder, tools } from "ts-ebml";
+import {
+  ChildElementsValue,
+  EBMLElementDetail,
+  ElementDetail,
+  Encoder,
+  tools
+} from "ts-ebml";
 import _Buffer from "buffer/";
 
 import Recorder from "@/components/Recorder";
@@ -8,6 +14,10 @@ import PlayerComponent from "@/components/Player";
 
 import Player from "@/lib/player";
 import downloadBlob from "@/lib/downloadBlob";
+
+type TimestampTag = ChildElementsValue & {
+  data: Buffer;
+} & ElementDetail;
 
 const ONE_SECOND = 1000;
 
@@ -36,6 +46,69 @@ const shiftTrack = (
       return shiftTag(tag, shift);
     }
   });
+
+const createVIntFromUInt = (data: Buffer) => {
+  let vInt = new Buffer(data);
+
+  let length = 1 << (8 - vInt.length);
+  if (vInt[0] >= length) {
+    length = length >> 1;
+
+    let oldData = new Buffer([length]);
+    vInt.forEach(item => {
+      const newSlice = Buffer.concat([oldData, new Buffer([item])]);
+      oldData = newSlice;
+    });
+    vInt = oldData;
+  } else {
+    vInt[0] = vInt[0] | length;
+  }
+
+  return vInt;
+};
+
+const shiftTimestamp = (tag: TimestampTag, initialShift: number) => {
+  const copyTag = { ...tag };
+  let oldData = copyTag.data;
+  let timestampShift = 0;
+
+  const dataWithLength = createVIntFromUInt(oldData);
+  const timestamp = tools.readVint(dataWithLength, 0)?.value ?? 0;
+
+  let newData = tools.writeVint(timestamp - initialShift);
+
+  newData[0] = newData[0] & ((1 << (8 - newData.length)) - 1);
+
+  if (newData[0] === 0 && newData.length > 1) {
+    // @ts-ignore
+    newData = new Buffer(Uint8Array.prototype.slice.call(newData, 1));
+  }
+
+  // seems like we need to shift other blocks cumulatively as well
+  timestampShift = dataWithLength.length - newData.length;
+
+  copyTag.data = newData;
+
+  copyTag.dataEnd = copyTag.dataEnd - timestampShift;
+  copyTag.dataSize = newData.length;
+
+  return copyTag;
+};
+
+const shiftClusters = (
+  clusters: EBMLElementDetail[],
+  playbackShift: number,
+  initialTimestampShift: number
+) => {
+  return clusters.map(tag => {
+    let newTag: EBMLElementDetail = shiftTag(tag, playbackShift);
+
+    if (newTag.name === "Timestamp" && "data" in newTag) {
+      newTag = shiftTimestamp(newTag, initialTimestampShift);
+    }
+    return newTag;
+  });
+};
 
 export default function Cluster() {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -72,26 +145,15 @@ export default function Cluster() {
     ) => {
       if (isPlaying) {
         const data: EBMLElementDetail[] = [];
+        const flatTagsArray = newClusters.flat();
 
-        newClusters.forEach(cluster => {
-          cluster.forEach(tag => {
-            const newTag: EBMLElementDetail = {
-              ...tag,
-              dataEnd: tag.dataEnd === -1 ? -1 : tag.dataEnd - shiftRef.current,
-              dataSize:
-                tag.dataSize === -1 ? -1 : tag.dataSize - shiftRef.current,
-              dataStart: tag.dataStart - shiftRef.current,
-              sizeEnd: tag.sizeEnd - shiftRef.current,
-              sizeStart: tag.sizeStart - shiftRef.current,
-              tagEnd: tag.tagEnd - shiftRef.current,
-              tagStart: tag.tagStart - shiftRef.current
-            };
-
-            data.push(newTag);
-          });
-        });
-
-        // data.push(...newClusters.slice(-1)[0]);
+        data.push(
+          ...shiftClusters(
+            flatTagsArray,
+            shiftRef.current,
+            timestampShiftRef.current ?? 0
+          )
+        );
 
         const encodedData = encoder.current?.encode(data);
 
@@ -120,72 +182,35 @@ export default function Cluster() {
       if (headerRef.current !== null) {
         data.push(...headerRef.current);
       }
+
       console.log("clustersRef.current", clustersRef.current);
+
       if (clustersRef.current.length) {
-        clustersRef.current.forEach(cluster => {
-          cluster.forEach(tag => {
-            // {
-            //   ...tag,
-            //   dataEnd: tag.dataEnd === -1 ? -1 : tag.dataEnd - shiftRef.current,
-            //   dataStart: tag.dataStart - shiftRef.current,
-            //   sizeEnd: tag.sizeEnd - shiftRef.current,
-            //   sizeStart: tag.sizeStart - shiftRef.current,
-            //   tagEnd: tag.tagEnd - shiftRef.current,
-            //   tagStart: tag.tagStart - shiftRef.current
-            // };
+        const flatTagsArray = clustersRef.current.flat();
 
-            let timestampShift = 0;
+        const firstTimestampIndex = flatTagsArray.findIndex(
+          tag => tag.name === "Timestamp"
+        );
 
-            const newTag: EBMLElementDetail = shiftTag(tag, shiftRef.current);
+        const firstTimestamp: TimestampTag = flatTagsArray[
+          firstTimestampIndex
+        ] as TimestampTag;
 
-            if (newTag.name === "Timestamp" && "data" in newTag) {
-              let oldData = newTag.data;
+        const dataWithLength = createVIntFromUInt(firstTimestamp.data);
+        const timestamp = tools.readVint(dataWithLength, 0)?.value ?? 0;
 
-              let length = 1 << (8 - oldData.length);
-              if (oldData[0] >= length) {
-                length = length >> 1;
+        timestampShiftRef.current =
+          timestampShiftRef.current === null
+            ? timestamp
+            : timestampShiftRef.current;
 
-                // @ts-ignore
-                oldData = new Buffer([length]);
-                newTag.data.forEach(item => {
-                  const newSlice = Buffer.concat([oldData, new Buffer([item])]);
-                  // @ts-ignore
-                  oldData = newSlice;
-                });
-              } else {
-                oldData[0] = oldData[0] | length;
-              }
-
-              const timestamp = tools.readVint(oldData, 0)?.value ?? 0;
-              timestampShiftRef.current =
-                timestampShiftRef.current === null
-                  ? timestamp
-                  : timestampShiftRef.current;
-
-              let newData = tools.writeVint(
-                timestamp - timestampShiftRef.current
-              );
-
-              newData[0] = newData[0] & ((1 << (8 - newData.length)) - 1);
-
-              if (newData[0] === 0 && newData.length > 1) {
-                // @ts-ignore
-                newData = new _Buffer(
-                  Uint8Array.prototype.slice.call(newData, 1)
-                );
-              }
-
-              timestampShift = oldData.length - newData.length;
-
-              newTag.data = newData;
-
-              newTag.dataEnd = newTag.dataEnd - timestampShift;
-              newTag.dataSize = newData.length;
-            }
-
-            data.push(newTag);
-          });
-        });
+        data.push(
+          ...shiftClusters(
+            flatTagsArray,
+            shiftRef.current,
+            timestampShiftRef.current
+          )
+        );
       }
 
       shiftedDataRef.current = data;
@@ -200,45 +225,6 @@ export default function Cluster() {
 
       playerRef.current?.play();
     }
-
-    // const data = [];
-
-    // if (headerRef.current !== null) {
-    //   data.push(...headerRef.current);
-    //   headerRef.current = null;
-    // }
-
-    // if (clustersRef.current?.length > 0) {
-    //   clustersRef.current.forEach(cluster => {
-    //     data.push(...cluster);
-    //   });
-
-    //   clustersRef.current = [];
-    // }
-
-    // const encodedData = encoder.current?.encode(data);
-
-    // if (encodedData?.byteLength) {
-    //   const blob = new Blob([encodedData], { type: "video/webm" });
-    //   downloadBlob(blob, "test.webm", "video/webm");
-    // }
-
-    // if (encodedData?.byteLength) {
-    //   const onePartLength = 5000;
-    //   const length = Math.ceil(encodedData.byteLength / 5000);
-    //   for (let i = 0; i < length; i += 1) {
-    //     const start = i * onePartLength;
-    //     let end = start + onePartLength;
-
-    //     if (end > encodedData.byteLength) {
-    //       end = encodedData.byteLength;
-    //     }
-    //     const part = encodedData.slice(start, end);
-
-    //     player.current?.addChunk(part);
-    //   }
-    //   playerRef.current?.play();
-    // }
   }, []);
 
   const downloadClickHandler = useCallback(() => {
