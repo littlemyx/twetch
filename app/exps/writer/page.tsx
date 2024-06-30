@@ -1,10 +1,18 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import GUN from "gun";
+
+import "gun/lib/radix.js";
+import "gun/lib/radisk.js";
+import "gun/lib/store.js";
+import "gun/lib/rindexed.js";
+
 import {
   ChildElementsValue,
   EBMLElementDetail,
   ElementDetail,
   Encoder,
+  NumberElement,
   tools
 } from "ts-ebml";
 import _Buffer from "buffer/";
@@ -13,16 +21,29 @@ import Recorder from "@/components/Recorder";
 import PlayerComponent from "@/components/Player";
 
 import Player from "@/lib/player";
+import { serializeTag, deserializeTag } from "@/lib/EBML2JSON";
 import downloadBlob from "@/lib/downloadBlob";
 
-type TimestampTag = ChildElementsValue & {
+type TimestampTag = NumberElement & {
   data: Buffer;
 } & ElementDetail;
 
 const ONE_SECOND = 1000;
 
+const gun = GUN({
+  // peers: ["https://relay.peer.ooo/gun", "https://gun-ams1.cl0vr.co:443/gun"],
+  localStorage: false
+});
+
 // @ts-ignore
 const Buffer: typeof globalThis.Buffer = _Buffer.Buffer;
+
+const getStringSize = (s: string) => new Blob([s]).size;
+
+const sliceArray = (array: any[], chunkSize: number) =>
+  [...Array(Math.ceil(array.length / chunkSize))].map(_ =>
+    array.splice(0, chunkSize)
+  );
 
 const shiftTag = (tag: EBMLElementDetail, shift: number) => ({
   ...tag,
@@ -73,7 +94,8 @@ const shiftTimestamp = (tag: TimestampTag, initialShift: number) => {
   let timestampShift = 0;
 
   const dataWithLength = createVIntFromUInt(oldData);
-  const timestamp = tools.readVint(dataWithLength, 0)?.value ?? 0;
+  // const timestamp = tools.readVint(dataWithLength, 0)?.value ?? 0;
+  const timestamp = tag.value;
 
   let newData = tools.writeVint(timestamp - initialShift);
 
@@ -100,25 +122,35 @@ const shiftClusters = (
   playbackShift: number,
   initialTimestampShift: number
 ) => {
-  return clusters.map(tag => {
-    let newTag: EBMLElementDetail = shiftTag(tag, playbackShift);
+  return clusters.map(_tag => {
+    // const serialized = serializeTag(_tag);
+    // const [tag] = deserializeTag(serialized);
 
-    if (newTag.name === "Timestamp" && "data" in newTag) {
+    let newTag: EBMLElementDetail = shiftTag(_tag, playbackShift);
+
+    if (
+      newTag.name === "Timestamp" &&
+      "data" in newTag &&
+      typeof newTag.value === "number" &&
+      (newTag.type === "u" || newTag.type === "i" || newTag.type === "f")
+    ) {
       newTag = shiftTimestamp(newTag, initialTimestampShift);
     }
     return newTag;
   });
 };
 
-export default function Cluster() {
+export default function Writer() {
   const [isPlaying, setIsPlaying] = useState(false);
   const headerRef = useRef<EBMLElementDetail[] | null>(null);
   const clustersRef = useRef<EBMLElementDetail[][]>([]);
   const playerRef = useRef<HTMLVideoElement | null>(null);
   const shiftedDataRef = useRef<EBMLElementDetail[] | null>(null);
   const renderedDataRef = useRef<ArrayBuffer | undefined | null>(null);
+
   const reducedDataRef = useRef<EBMLElementDetail[] | null>(null);
   const timestampShiftRef = useRef<number | null>(null);
+  const iterationRef = useRef<number>(1);
   const shiftRef = useRef<number>(0);
 
   const encoder = useRef<Encoder | null>(null);
@@ -144,16 +176,23 @@ export default function Cluster() {
       shift: number
     ) => {
       if (isPlaying) {
+        console.log("newClusters", newClusters);
         const data: EBMLElementDetail[] = [];
         const flatTagsArray = newClusters.flat();
 
-        data.push(
-          ...shiftClusters(
-            flatTagsArray,
-            shiftRef.current,
-            timestampShiftRef.current ?? 0
-          )
+        const shiftedClusters = shiftClusters(
+          flatTagsArray,
+          shiftRef.current,
+          timestampShiftRef.current ?? 0
         );
+
+        const serializedCluster = JSON.stringify(shiftedClusters);
+
+        gun.get("tWEtch_test_2").get("cluster").put(serializedCluster);
+
+        data.push(...shiftedClusters);
+
+        iterationRef.current += 1;
 
         const encodedData = encoder.current?.encode(data);
 
@@ -181,6 +220,10 @@ export default function Cluster() {
 
       if (headerRef.current !== null) {
         data.push(...headerRef.current);
+
+        const serializedHeader = JSON.stringify(headerRef.current);
+
+        gun.get("tWEtch_test_2").get("header").put(serializedHeader);
       }
 
       console.log("clustersRef.current", clustersRef.current);
@@ -196,21 +239,44 @@ export default function Cluster() {
           firstTimestampIndex
         ] as TimestampTag;
 
-        const dataWithLength = createVIntFromUInt(firstTimestamp.data);
-        const timestamp = tools.readVint(dataWithLength, 0)?.value ?? 0;
-
         timestampShiftRef.current =
           timestampShiftRef.current === null
-            ? timestamp
+            ? (firstTimestamp.value as number) ?? null
             : timestampShiftRef.current;
 
-        data.push(
-          ...shiftClusters(
-            flatTagsArray,
-            shiftRef.current,
-            timestampShiftRef.current
-          )
+        const shiftedClusters = shiftClusters(
+          flatTagsArray,
+          shiftRef.current,
+          timestampShiftRef.current
         );
+
+        const serializedCluster = JSON.stringify(shiftedClusters);
+
+        gun.get("tWEtch_test_2").get("cluster").put(serializedCluster);
+
+        // shiftedClusters.slice(0, 190).forEach((cluster, index) => {
+        //   const serializedCluster = JSON.stringify(cluster);
+
+        //   console.log("size", getStringSize(serializedCluster));
+
+        //   gun
+        //     .get("tWEtch_test_2")
+        //     // .get("test_id")
+        //     // .get("cluster_1")
+        //     .get(`tag_${index}`)
+        //     .put({ value: serializedCluster });
+
+        //   // sliceArray(serializedCluster.split(""), 10).forEach(
+        //   //   (slice, sliceIndex) => {
+        //   //     gun
+        //   //       .get("tWEtch_test_0")
+        //   //       .get(`video_${index}`)
+        //   //       .put({ value: serializedCluster });
+        //   //   }
+        //   // );
+        // });
+
+        data.push(...shiftedClusters);
       }
 
       shiftedDataRef.current = data;

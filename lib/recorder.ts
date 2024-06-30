@@ -41,6 +41,8 @@ export default class Recorder {
       audio: true,
       video: {
         width: { min: 640, ideal: 640, max: 640 },
+        // width: { min: 1440, ideal: 1440, max: 1080 },
+        // height: { min: 1080, ideal: 1080, max: 1080 }
         height: { min: 640, ideal: 640, max: 640 }
       }
     }

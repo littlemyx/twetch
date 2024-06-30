@@ -110,27 +110,29 @@ export default function RecorderComponent({
           const overflow = queue.current!.push(cluster);
 
           if (overflow !== null) {
-            const firstItem = queue.current!.getItemByIndex(0);
+            const overflowedItemLength =
+              overflow[overflow.length - 1].dataEnd - overflow[0].tagStart;
 
-            if (overflow !== null) {
-              const overflowedItemLength =
-                overflow[overflow.length - 1].dataEnd - overflow[0].tagStart;
-
-              shift = shift + overflowedItemLength;
-            }
+            shift = shift + overflowedItemLength;
           }
         });
 
-        shiftRef.current = shift;
+        if (
+          shiftRef.current !== shift ||
+          queue.current.length >= queue.current.currentNumberOfItems
+        ) {
+          shiftRef.current = shift;
 
-        // console.log("header", header.length);
-        // console.log("queue", queue.current?.getAll().length);
+          // console.log("header", header.length);
+          // console.log("queue", queue.current?.getAll().length);
 
-        onClustersUpdateRef.current(
-          queue.current?.getAll() ?? [],
-          header,
-          shiftRef.current
-        );
+          const nextItem = queue.current!.getItemByIndex(
+            queue.current.currentNumberOfItems - 1
+          );
+          if (nextItem !== null) {
+            onClustersUpdateRef.current([nextItem], header, shiftRef.current);
+          }
+        }
       } else {
         throw new Error("Queue is not defined");
       }
